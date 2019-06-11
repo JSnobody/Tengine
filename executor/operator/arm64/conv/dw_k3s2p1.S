@@ -53,88 +53,102 @@
 .type KERNEL_NAME, %function
 
 KERNEL_NAME:
-   cmp x1,2
-   bgt begin
-   cmp x2,2
-   bgt begin
-   cmp x1,1
-   bne input_2_2
+    cmp x1,2
+    bgt begin
+    cmp x2,2
+    bgt begin
+    cmp x1,1
+    bne input_2_2
 
 input_1_1:
-   ldr s12,[x0]
-   ldr s24,[x3,#16]
-   fmul s4,s24,s12
-   str s4,[x4]
-   b all_row_done
+    ldr s12,[x0]
+    ldr s24,[x3,#16]
+    fmul s4,s24,s12
+    cbz x5,input_1_1_non_biases
+    ldr s21,[x5]
+    fadd s4,s21,s4
+input_1_1_non_biases:
+#ifdef CONV_RELU_FUSE
+    fmax s4,s4,wzr
+#endif
+    str s4,[x4]
+    b all_row_done
 
 // input size is 2x2
 input_2_2:
-   ld1 {v12.4s},[x0]        //a00,a01,a10,a11
-   ld1 {v23.4s,v24.4s,v25.4s}, [x3]
-   ins v24.s[2],v24.s[3]
-   ins v24.s[3],v25.s[0]    //k11,k12,k21,k22
-   fmul v4.4s,v12.4s,v24.4s
-   faddp v4.4s,v4.4s,v4.4s
-   faddp v4.4s,v4.4s,v4.4s
-   str s4,[x4]
-   b all_row_done
+    ld1 {v12.4s},[x0]        //a00,a01,a10,a11
+    ld1 {v23.4s,v24.4s,v25.4s}, [x3]
+    ins v24.s[2],v24.s[3]
+    ins v24.s[3],v25.s[0]    //k11,k12,k21,k22
+    fmul v4.4s,v12.4s,v24.4s
+    faddp v4.4s,v4.4s,v4.4s
+    faddp v4.4s,v4.4s,v4.4s
+    cbz x5,input_2_2_non_biases
+    ldr s21,[x5]
+    fadd s4,s21,s4
+input_2_2_non_biases:
+#ifdef CONV_RELU_FUSE
+    fmax s4,s4,wzr
+#endif
+    str s4,[x4]
+    b all_row_done
 
 begin:
-   //Load Kernel
-   ld1 {v24.4s,v25.4s,v26.4s}, [x3]
-   ext  v26.16b,v25.16b,v26.16b,8
-   ext  v25.16b,v24.16b,v25.16b,12
+    //Load Kernel
+    ld1 {v24.4s,v25.4s,v26.4s}, [x3]
+    ext  v26.16b,v25.16b,v26.16b,8
+    ext  v25.16b,v24.16b,v25.16b,12
 
-   sub x9,x2,1
-   lsr x9,x9,1
-   add x9,x9,1
-   lsl x9,x9,2
-   fmov s31,wzr
-   dup  v31.4s,v31.s[0]
+    sub x9,x2,1
+    lsr x9,x9,1
+    add x9,x9,1
+    lsl x9,x9,2
+    fmov s31,wzr
+    dup  v31.4s,v31.s[0]
 
-   //get bias
-   cbz x5,non_biases
-   ldr s21,[x5]
-   dup v21.4s,v21.s[0]
-   b first_row_start
+    //get bias
+    cbz x5,non_biases
+    ldr s21,[x5]
+    dup v21.4s,v21.s[0]
+    b first_row_start
 
 non_biases:
-   fmov s21,wzr
-   dup v21.4s,v21.s[0]
+    fmov s21,wzr
+    dup v21.4s,v21.s[0]
 
 //first row
 
 first_row_start:
-   sub  x1,x1,1
+    sub  x1,x1,1
      
-   lsr  x8,x2,3    //x8 loop counter
-   lsl  x7,x8,3    //x7 processed number
+    lsr  x8,x2,3    //x8 loop counter
+    lsl  x7,x8,3    //x7 processed number
 
-   ins  v27.s[3],v31.s[0]   //pre_vector for input
+    ins  v27.s[3],v31.s[0]   //pre_vector for input
 
-   mov x10,x4      //L-1  //L1 ONLY
-   cbz  x8,first_less_8
+    mov x10,x4      //L-1  //L1 ONLY
+    cbz  x8,first_less_8
    
 first_loop_start:
-   //load 4 float input
-   ld1 {v12.4s,v13.4s},[x0],#32    //a00,a01,a02,a03,a04,a05,a06,a07
+    //load 4 float input
+    ld1 {v12.4s,v13.4s},[x0],#32    //a00,a01,a02,a03,a04,a05,a06,a07
    
-   uzp1 v29.4s,v12.4s,v13.4s  //a00,a02,a04,a06
-   uzp2 v30.4s,v12.4s,v13.4s  //a01,a03,a05,a07
-   ext v28.16b,v27.16b,v30.16b,12  //last_3 , a01, a03,a05
+    uzp1 v29.4s,v12.4s,v13.4s  //a00,a02,a04,a06
+    uzp2 v30.4s,v12.4s,v13.4s  //a01,a03,a05,a07
+    ext v28.16b,v27.16b,v30.16b,12  //last_3 , a01, a03,a05
    
-   /*
+    /*
      v28:   last_3, a01, a03, a05
      v29    a00     a02,  a04, a06
      v30    a01     a03,  a05, a07
-   */  
+    */  
    
-   //L-1: k1 xinput
-   fmul v4.4s,v28.4s,v25.s[0]  //k10, 
-   fmla v4.4s,v29.4s,v25.s[1]  //k11,
-   fmla v4.4s,v30.4s,v25.s[2]  //k12
+    //L-1: k1 xinput
+    fmul v4.4s,v28.4s,v25.s[0]  //k10, 
+    fmla v4.4s,v29.4s,v25.s[1]  //k11,
+    fmla v4.4s,v30.4s,v25.s[2]  //k12
 
-   ins v27.s[3],v13.s[3]  //save prev vector
+    ins v27.s[3],v13.s[3]  //save prev vector
 
     //save data, four are valid
     st1 {v4.4s},[x10],#16
